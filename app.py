@@ -1,26 +1,32 @@
-# app.py — Bassam Tracker (FINAL)
+# app.py
 from __future__ import annotations
 from fastapi import FastAPI, Request, HTTPException, Query
-from fastapi.responses import JSONResponse, HTMLResponse, PlainTextResponse, FileResponse
+from fastapi.responses import JSONResponse, HTMLResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
-import json, pathlib, io
+import json, os, pathlib
 
 app = FastAPI(title="bassam-tracker")
 
 # ===== إعدادات عامة =====
-ADMIN_PIN  = "bassam1234"
-DATA_FILE  = pathlib.Path("events.jsonl")  # تخزين سطر-بسطر
+ADMIN_PIN = os.getenv("ADMIN_PIN", "bassam1234")
 
-# ===== CORS =====
+# مسار التخزين: يُفضَّل قرص دائم على Render (انظر الخطوة 4)
+DATA_FILE = pathlib.Path(os.getenv("DATA_FILE", "/var/data/events.jsonl"))
+
+# أصول مسموحة CORS — عدّلها إلى نطاقات تطبيقك
+ALLOW_ORIGINS = os.getenv("ALLOW_ORIGINS", "*").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], allow_credentials=False,
-    allow_methods=["*"], allow_headers=["*"],
+    allow_origins=ALLOW_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# ===== أدوات تخزين =====
+# ===== تخزين سطر-بسطر =====
 def utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -30,22 +36,23 @@ def append_event(event: dict) -> None:
         f.write(json.dumps(event, ensure_ascii=False) + "\n")
 
 def load_all_events() -> list[dict]:
-    if not DATA_FILE.exists(): return []
+    if not DATA_FILE.exists():
+        return []
     out = []
     with DATA_FILE.open("r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            if not line: continue
-            try: out.append(json.loads(line))
-            except: pass
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except Exception:
+                pass
     return out
 
-# ===== استقبال الأحداث من التطبيق الأم =====
+# ===== استقبال أحداث التتبّع =====
 @app.post("/track", response_class=JSONResponse)
 async def track(req: Request):
-    """
-    يَستقبل JSON: {event, deviceId, payload?}
-    """
     try:
         body = await req.json()
     except Exception:
@@ -67,21 +74,22 @@ async def track(req: Request):
     append_event(event)
     return {"ok": True}
 
-# ===== تحليل الإحصائيات =====
+# ===== حساب الإحصائيات =====
 def compute_stats(events: list[dict]) -> dict:
     devices = {e.get("deviceId") for e in events if e.get("deviceId")}
-    total_events   = len(events)
+    total_events = len(events)
     total_searches = sum(1 for e in events if e.get("event") == "search")
 
-    # تجميع يومي
     daily_raw = defaultdict(lambda: {"date": None, "unique_devices": 0, "searches": 0})
     devices_per_day = defaultdict(set)
+
     for e in events:
         ts = e.get("ts")
         try:
             d = datetime.fromisoformat(str(ts).replace("Z", "+00:00")).astimezone(timezone.utc).date().isoformat()
         except Exception:
             d = datetime.utcnow().date().isoformat()
+
         devices_per_day[d].add(e.get("deviceId"))
         if e.get("event") == "search":
             daily_raw[d]["searches"] += 1
@@ -91,14 +99,10 @@ def compute_stats(events: list[dict]) -> dict:
         daily_raw[d]["unique_devices"] = len({x for x in devices_per_day[d] if x})
     daily = sorted(daily_raw.values(), key=lambda x: x["date"])
 
-    # أعلى كلمات البحث
-    top = Counter((e.get("payload") or {}).get("q", "").strip()
-                  for e in events if e.get("event") == "search")
-    top.pop("", None)
+    top = Counter((e.get("payload") or {}).get("q", "").strip() for e in events if e.get("event") == "search")
+    if "" in top:
+        del top[""]
     top_searches = [{"q": q, "count": c} for q, c in top.most_common(50)]
-
-    # آخر 20 حدثًا
-    latest = events[-20:]
 
     return {
         "unique_devices": len(devices),
@@ -106,7 +110,6 @@ def compute_stats(events: list[dict]) -> dict:
         "total_searches": total_searches,
         "daily": daily,
         "top_searches": top_searches,
-        "latest": latest,
     }
 
 # ===== JSON محمي =====
@@ -116,87 +119,89 @@ def stats(pin: str = Query(..., min_length=4, max_length=64)):
         raise HTTPException(status_code=403, detail="Forbidden")
     return compute_stats(load_all_events())
 
-# ===== تصدير/تفريغ (للمالك) =====
-@app.get("/export")
-def export(pin: str = Query(...)):
-    if pin != ADMIN_PIN: raise HTTPException(status_code=403, detail="Forbidden")
-    data = DATA_FILE.read_bytes() if DATA_FILE.exists() else b""
-    return FileResponse(path=DATA_FILE, filename="events.jsonl",
-                        media_type="text/plain") if DATA_FILE.exists() \
-           else PlainTextResponse("", media_type="text/plain")
-
-@app.post("/clear")
-def clear(pin: str = Query(...)):
-    if pin != ADMIN_PIN: raise HTTPException(status_code=403, detail="Forbidden")
-    if DATA_FILE.exists(): DATA_FILE.unlink()
-    return {"ok": True}
-
-# ===== تقديم tracker.js مباشرة (اختياري) =====
-@app.get("/tracker.js")
-def tracker_js():
-    return FileResponse("tracker.js", media_type="application/javascript")
-
-# ===== لوحة المالك =====
-DASHBOARD_FALLBACK = """<!DOCTYPE html><meta charset="utf-8"><meta name=viewport content="width=device-width,initial-scale=1">
+# ===== لوحة التحكم (صفحة واحدة) =====
+DASHBOARD_HTML = r"""<!DOCTYPE html>
+<html lang="ar" dir="rtl"><head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>لوحة تحكم المالك</title>
-<style>body{font-family:'Noto Kufi Arabic',system-ui;background:#f1f5f9;margin:0}
-.wrap{max-width:1080px;margin:18px auto;padding:0 12px} .top{background:#16a34a;color:#fff;padding:14px 16px;border-radius:12px;font-weight:900;font-size:20px}
-.controls{display:flex;gap:8px;align-items:center;margin:12px 0} input{padding:10px;border:1px solid #cbd5e1;border-radius:10px}
+<style>
+:root{--green:#16a34a;--ink:#0f172a;--muted:#64748b;--bg:#f1f5f9;--card:#fff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);font-family:'Noto Kufi Arabic',system-ui,sans-serif;color:var(--ink)}
+.wrap{max-width:980px;margin:18px auto;padding:0 12px}
+.top{background:var(--green);color:#fff;padding:14px 16px;border-radius:12px;font-weight:900;font-size:20px}
+.row{display:flex;gap:12px;flex-wrap:wrap;margin-top:12px}
+.card{flex:1 1 220px;background:var(--card);border:1px solid #e5e7eb;border-radius:12px;padding:14px;box-shadow:0 4px 16px rgba(0,0,0,.05)}
+.kpi{font-size:36px;font-weight:900;margin-top:6px}
+.muted{color:var(--muted);font-size:12px}
+.controls{display:flex;gap:8px;align-items:center;margin-top:12px}
+input{padding:10px 12px;border:1px solid #cbd5e1;border-radius:10px}
 button{padding:10px 12px;border:none;border-radius:10px;background:#0ea5e9;color:#fff;font-weight:800;cursor:pointer}
-.row{display:flex;gap:12px;flex-wrap:wrap} .card{flex:1 1 260px;background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:14px;box-shadow:0 4px 16px rgba(0,0,0,.05)}
-.kpi{font-size:36px;font-weight:900;margin-top:6px} .muted{color:#64748b;font-size:12px}
-table{width:100%;border-collapse:collapse} th,td{padding:8px;border-bottom:1px dashed #e5e7eb;text-align:start;font-size:13px}
-th{background:#f8fafc} .mono{font-family:ui-monospace,Menlo,Consolas,monospace} canvas{width:100%;height:240px;display:block}</style>
-<div class=wrap>
-<div class=top>📊 لوحة تحكم المالك</div>
-<div class=controls>
-  <input id=pin placeholder=PIN value=bassam1234>
-  <button id=load>عرض</button>
-  <button id=export>تصدير</button>
-  <button id=clear>تفريغ</button>
-  <span id=msg class=muted></span>
+table{width:100%;border-collapse:collapse}
+th,td{padding:8px;border-bottom:1px dashed #e5e7eb;text-align:start}
+canvas{width:100%;height:220px;display:block}
+</style></head>
+<body><div class="wrap">
+  <div class="top">📊 لوحة تحكم المالك</div>
+  <div class="controls">
+    <input id="pin" placeholder="PIN" value="bassam1234">
+    <button id="load">عرض</button>
+    <span class="muted" id="msg"></span>
+  </div>
+  <div class="row">
+    <div class="card"><div class="muted">أجهزة فريدة</div><div class="kpi" id="kpi_devices">–</div></div>
+    <div class="card"><div class="muted">إجمالي الأحداث</div><div class="kpi" id="kpi_events">–</div></div>
+    <div class="card"><div class="muted">إجمالي عمليات البحث</div><div class="kpi" id="kpi_searches">–</div></div>
+  </div>
+  <div class="row">
+    <div class="card" style="flex:2 1 420px"><div class="muted">المستخدمون والبحث حسب اليوم</div><canvas id="chart"></canvas></div>
+    <div class="card" style="flex:1 1 260px"><div class="muted">أعلى كلمات البحث</div><table id="top"></table></div>
+  </div>
 </div>
-<div class=row>
-  <div class=card><div class=muted>أجهزة فريدة</div><div id=kpi_devices class=kpi>–</div></div>
-  <div class=card><div class=muted>إجمالي الأحداث</div><div id=kpi_events class=kpi>–</div></div>
-  <div class=card><div class=muted>إجمالي عمليات البحث</div><div id=kpi_searches class=kpi>–</div></div>
-</div>
-<div class=row>
-  <div class=card style="flex:2 1 520px"><div class=muted>المستخدمون والبحث حسب اليوم (آخر 14 يوم)</div><canvas id=chart></canvas></div>
-  <div class=card style="flex:1 1 280px"><div class=muted>أعلى كلمات البحث</div><table id=top><tr><th>الكلمة</th><th>العدد</th></tr></table></div>
-</div>
-<div class=card style="margin-top:12px">
-  <div class=muted style="margin-bottom:6px">آخر 20 حدثًا</div>
-  <table id=latest><tr><th>الوقت (UTC)</th><th>IP</th><th>الحدث</th><th>الكلمة/المسار</th><th>المتصفح</th></tr></table>
-</div></div>
 <script>
-const $=id=>document.getElementById(id);const pin=$('pin'),btn=$('load'),msg=$('msg');
-const kpiD=$('kpi_devices'),kpiE=$('kpi_events'),kpiS=$('kpi_searches'),topTbl=$('top'),chartEl=$('chart'),latestTbl=$('latest');
-$('export').onclick=()=>open('/export?pin='+encodeURIComponent(pin.value),'_blank');
-$('clear').onclick=async()=>{if(!confirm('تفريغ جميع السجلات؟'))return;const r=await fetch('/clear?pin='+encodeURIComponent(pin.value),{method:'POST'});msg.textContent=r.ok?'تم':'فشل';load();};
-btn.onclick=load;function esc(s){return String(s||'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));}
-async function load(){msg.textContent='...';try{const r=await fetch('/stats?pin='+encodeURIComponent(pin.value));if(!r.ok)throw new Error('PIN خطأ');const d=await r.json();
-kpiD.textContent=d.unique_devices??0;kpiE.textContent=d.total_events??0;kpiS.textContent=d.total_searches??0;
-topTbl.innerHTML='<tr><th>الكلمة</th><th>العدد</th></tr>'+((d.top_searches||[]).map(x=>`<tr><td>${esc(x.q)}</td><td>${x.count}</td></tr>`).join('')||'<tr><td colspan=2>لا بيانات</td></tr>');
-latestTbl.innerHTML=`<tr><th>الوقت (UTC)</th><th>IP</th><th>الحدث</th><th>الكلمة/المسار</th><th>المتصفح</th></tr>`+(d.latest||[]).map(e=>{
-const p=e.payload||{};const qp=p.q?`🔎 ${esc(p.q)}`:(p.path?`📄 ${esc(p.path)}`:'');return `<tr>
-<td class=mono>${esc(e.ts||'')}</td><td class=mono>${esc(e.ip||'-')}</td><td>${esc(e.event||'-')}</td><td>${qp}</td>
-<td title="${esc(e.ua||'')}">${esc(String(e.ua||'').slice(0,38))}…</td></tr>`;}).join('');
-draw(chartEl,d.daily||[],{a:'unique_devices',b:'searches'});msg.textContent='تم.';}catch(e){msg.textContent='فشل: '+e.message;}}
-function draw(c,d,k){d=d.slice(-14);const L=d.map(x=>x.date),A=d.map(x=>+x[k.a]||0),B=d.map(x=>+x[k.b]||0);const W=c.clientWidth,H=c.clientHeight;c.width=W*devicePixelRatio;c.height=H*devicePixelRatio;
-const x=c.getContext('2d');x.scale(devicePixelRatio,devicePixelRatio);x.clearRect(0,0,W,H);const M=Math.max(1,...A,...B),P=28,iw=W-P*2,ih=H-P*2,n=L.length||1,g=iw/n;
-x.strokeStyle='#e5e7eb';x.beginPath();x.moveTo(P,H-P);x.lineTo(W-P,H-P);x.stroke();for(let i=0;i<n;i++){const x0=P+i*g,w=Math.max(6,g*.36),gap=g*.08,hA=ih*(A[i]/M),hB=ih*(B[i]/M);
-x.fillStyle='#86efac';x.fillRect(x0+gap,H-P-hA,w,hA);x.fillStyle='#93c5fd';x.fillRect(x0+gap+w+gap,H-P-hB,w,hB);x.fillStyle='#64748b';x.font='10px system-ui';x.fillText(String(L[i]||'').slice(5),x0+gap,H-P+12);}}
-load();
-</script>"""
+const $=id=>document.getElementById(id);
+const pin=$('pin'), btn=$('load'), msg=$('msg');
+const kpi_devices=$('kpi_devices'), kpi_events=$('kpi_events'), kpi_searches=$('kpi_searches');
+const topTbl=$('top'); const chartEl=$('chart');
+async function loadStats(){
+  msg.textContent='جاري التحميل…';
+  try{
+    const r = await fetch(`/stats?pin=${encodeURIComponent(pin.value)}`);
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const data = await r.json();
+    kpi_devices.textContent = data.unique_devices ?? 0;
+    kpi_events.textContent  = data.total_events ?? 0;
+    kpi_searches.textContent= data.total_searches ?? 0;
+    const rows = (data.top_searches||[]).map(x=>`<tr><td>${escapeHtml(x.q)}</td><td>${x.count}</td></tr>`);
+    topTbl.innerHTML = `<tr><th>الكلمة</th><th>العدد</th></tr>` + (rows.join('')||'<tr><td colspan="2">لا يوجد بيانات</td></tr>');
+    drawBars(chartEl, data.daily||[], {a:'unique_devices', b:'searches'});
+    msg.textContent='تم.';
+  }catch(e){ msg.textContent='فشل: '+e.message; }
+}
+btn.addEventListener('click', loadStats);
+function escapeHtml(s){return String(s||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));}
+function drawBars(canvas, daily, keys){
+  const d = daily.slice(-14), labels=d.map(x=>x.date), A=d.map(x=>+x[keys.a]||0), B=d.map(x=>+x[keys.b]||0);
+  const W=canvas.clientWidth,H=canvas.clientHeight; canvas.width=W*devicePixelRatio; canvas.height=H*devicePixelRatio;
+  const ctx=canvas.getContext('2d'); ctx.scale(devicePixelRatio,devicePixelRatio); ctx.clearRect(0,0,W,H);
+  const max=Math.max(1,...A,...B), pad=28, innerW=W-pad*2, innerH=H-pad*2, n=labels.length||1, groupW=innerW/n;
+  ctx.strokeStyle='#e5e7eb'; ctx.beginPath(); ctx.moveTo(pad,H-pad); ctx.lineTo(W-pad,H-pad); ctx.stroke();
+  for(let i=0;i<n;i++){
+    const x0=pad+i*groupW, w=Math.max(6,groupW*0.36), gap=groupW*0.08;
+    const hA=innerH*(A[i]/max), hB=innerH*(B[i]/max);
+    ctx.fillStyle='#86efac'; ctx.fillRect(x0+gap, H-pad-hA, w, hA);
+    ctx.fillStyle='#93c5fd'; ctx.fillRect(x0+gap+w+gap, H-pad-hB, w, hB);
+    ctx.fillStyle='#64748b'; ctx.font='10px system-ui'; ctx.fillText(String(labels[i]||'').slice(5), x0+gap, H-pad+12);
+  }
+}
+loadStats();
+</script>
+</body></html>
+"""
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard():
-    # إن وُجد dashboard.html في نفس المجلد سيتم تقديمه، وإلا نستخدم النسخة المدمجة
-    p = pathlib.Path("dashboard.html")
-    if p.exists(): return HTMLResponse(p.read_text(encoding="utf-8"))
-    return HTMLResponse(DASHBOARD_FALLBACK)
+    return HTMLResponse(DASHBOARD_HTML)
 
-# ===== صحّة السيرفر =====
+# فحص سريع
 @app.get("/", response_class=PlainTextResponse)
 def root():
     return "bassam-tracker OK"
