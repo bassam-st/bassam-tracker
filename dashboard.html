@@ -1,164 +1,122 @@
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>لوحة تحكم المالك</title>
-<style>
-  :root{--green:#16a34a;--ink:#0f172a;--muted:#64748b;--bg:#f1f5f9;--card:#fff}
-  *{box-sizing:border-box} body{margin:0;background:var(--bg);font-family:'Noto Kufi Arabic',system-ui,sans-serif;color:var(--ink)}
-  .wrap{max-width:1080px;margin:18px auto;padding:0 12px}
-  .top{background:var(--green);color:#fff;padding:14px 16px;border-radius:12px;font-weight:900;font-size:20px}
-  .controls{display:flex;gap:8px;align-items:center;margin:12px 0}
-  input{padding:10px 12px;border:1px solid #cbd5e1;border-radius:10px}
-  button{padding:10px 12px;border:none;border-radius:10px;background:#0ea5e9;color:#fff;font-weight:800;cursor:pointer}
-  .row{display:flex;gap:12px;flex-wrap:wrap}
-  .card{flex:1 1 260px;background:var(--card);border:1px solid #e5e7eb;border-radius:12px;padding:14px;box-shadow:0 4px 16px rgba(0,0,0,.05)}
-  .kpi{font-size:36px;font-weight:900;margin-top:6px}
-  .muted{color:var(--muted);font-size:12px}
-  table{width:100%;border-collapse:collapse}
-  th,td{padding:8px;border-bottom:1px dashed #e5e7eb;text-align:start;font-size:13px}
-  th{background:#f8fafc}
-  .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace}
-  canvas{width:100%;height:240px;display:block}
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>📊 لوحة تحكم المالك — بسام تراكِر</title>
+  <style>
+    body {
+      margin:0; font-family:"Cairo",sans-serif;
+      background:#f9fafb; color:#111; direction:rtl;
+    }
+    header {
+      background:#16a34a; color:#fff; padding:14px; text-align:center;
+      font-size:22px; font-weight:800; border-bottom:4px solid #15803d;
+    }
+    main {
+      max-width:800px; margin:20px auto; background:#fff; border-radius:14px;
+      padding:20px; box-shadow:0 8px 20px rgba(0,0,0,.08);
+    }
+    input,button {font-family:inherit}
+    input[type=password] {
+      border:1px solid #ccc; border-radius:8px; padding:8px 10px; width:160px;
+    }
+    button {
+      background:#2563eb; border:none; color:#fff; padding:8px 14px;
+      border-radius:8px; font-weight:700; cursor:pointer;
+    }
+    button:disabled {background:#9ca3af;cursor:not-allowed}
+    .ok {color:#16a34a;font-weight:700;margin-inline:8px}
+    .stats {display:grid;gap:14px;margin-top:16px}
+    .card {
+      background:#f8fafc; border:2px solid #e2e8f0; border-radius:10px;
+      padding:12px 16px;
+    }
+    .card h3 {margin:0 0 6px;font-size:16px;color:#334155}
+    .num {font-size:32px;font-weight:900;color:#065f46}
+    table {
+      width:100%; border-collapse:collapse; margin-top:20px;
+    }
+    th,td {
+      border:1px solid #e5e7eb; padding:8px; text-align:center;
+    }
+    th {background:#f1f5f9;font-weight:700}
+    #chart {margin-top:30px}
+  </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="top">📊 لوحة تحكم المالك</div>
-
-  <div class="controls">
-    <input id="pin" placeholder="PIN" value="bassam1234">
-    <button id="load">عرض</button>
-    <button id="export">تصدير</button>
-    <button id="clear">تفريغ</button>
-    <span class="muted" id="msg"></span>
-  </div>
-
-  <div class="row">
-    <div class="card"><div class="muted">أجهزة فريدة</div><div class="kpi" id="kpi_devices">–</div></div>
-    <div class="card"><div class="muted">إجمالي الأحداث</div><div class="kpi" id="kpi_events">–</div></div>
-    <div class="card"><div class="muted">إجمالي عمليات البحث</div><div class="kpi" id="kpi_searches">–</div></div>
-  </div>
-
-  <div class="row">
-    <div class="card" style="flex:2 1 520px">
-      <div class="muted">المستخدمون والبحث حسب اليوم (آخر 14 يوم)</div>
-      <canvas id="chart"></canvas>
+  <header>📈 لوحة تحكم المالك</header>
+  <main>
+    <div>
+      <label>رمز المالك:</label>
+      <input type="password" id="pin" placeholder="bassam1234" />
+      <button id="loadBtn">عرض</button>
+      <span id="ok" class="ok" style="display:none">✅ تم</span>
     </div>
-    <div class="card" style="flex:1 1 280px">
-      <div class="muted">أعلى كلمات البحث</div>
-      <table id="top"><tr><th>الكلمة</th><th>العدد</th></tr></table>
-    </div>
-  </div>
 
-  <div class="card" style="margin-top:12px">
-    <div class="muted" style="margin-bottom:6px">آخر 20 حدثًا</div>
-    <table id="latest">
-      <tr>
-        <th>الوقت (UTC)</th><th>الـ IP</th><th>الحدث</th><th>الكلمة/المسار</th><th>المتصفح</th>
-      </tr>
+    <div class="stats" id="stats" style="display:none">
+      <div class="card"><h3>أجهزة فريدة</h3><div class="num" id="unique_devices">0</div></div>
+      <div class="card"><h3>إجمالي الأحداث</h3><div class="num" id="total_events">0</div></div>
+      <div class="card"><h3>إجمالي عمليات البحث</h3><div class="num" id="total_searches">0</div></div>
+    </div>
+
+    <canvas id="chart" height="120" style="width:100%;display:none"></canvas>
+
+    <table id="top" style="display:none">
+      <thead><tr><th>الكلمة</th><th>عدد مرات البحث</th></tr></thead>
+      <tbody></tbody>
     </table>
-  </div>
-</div>
+  </main>
 
-<script>
-const $=id=>document.getElementById(id);
-const pin=$('pin'), btn=$('load'), msg=$('msg');
-const kpi_devices=$('kpi_devices'), kpi_events=$('kpi_events'), kpi_searches=$('kpi_searches');
-const topTbl=$('top'), chartEl=$('chart'), latestTbl=$('latest');
-const btnExport=$('export'), btnClear=$('clear');
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script>
+    const btn=document.getElementById("loadBtn");
+    const ok=document.getElementById("ok");
+    const pin=document.getElementById("pin");
+    const sBox=document.getElementById("stats");
+    const chartCanvas=document.getElementById("chart");
+    const topT=document.getElementById("top");
+    const API="/stats?pin=";
 
-btn.addEventListener('click', loadStats);
-btnExport.addEventListener('click', ()=>open('/export?pin='+encodeURIComponent(pin.value), '_blank'));
-btnClear.addEventListener('click', async ()=>{
-  if(!confirm('سيتم تفريغ كل السجلات. متابعة؟')) return;
-  const r = await fetch('/clear?pin='+encodeURIComponent(pin.value), {method:'POST'});
-  if(r.ok){ msg.textContent='تم التفريغ.'; await loadStats(); } else { msg.textContent='تعذّر التفريغ.'; }
-});
+    btn.onclick=async()=>{
+      ok.style.display="none";
+      btn.disabled=true;
+      try{
+        const r=await fetch(API+encodeURIComponent(pin.value.trim()));
+        if(!r.ok)throw new Error("خطأ بالرمز أو الخادم");
+        const j=await r.json();
+        document.getElementById("unique_devices").textContent=j.unique_devices;
+        document.getElementById("total_events").textContent=j.total_events;
+        document.getElementById("total_searches").textContent=j.total_searches;
+        sBox.style.display="grid"; ok.style.display="inline";
+        renderChart(j.daily); renderTop(j.top_searches);
+      }catch(err){alert("❌ "+err.message);}
+      btn.disabled=false;
+    };
 
-async function loadStats(){
-  msg.textContent='جاري التحميل…';
-  try{
-    const r = await fetch('/stats?pin='+encodeURIComponent(pin.value));
-    if(!r.ok) throw new Error('PIN أو صلاحية غير صحيحة');
-    const data = await r.json();
+    function renderChart(daily){
+      if(!daily||!daily.length)return;
+      chartCanvas.style.display="block";
+      const ctx=chartCanvas.getContext("2d");
+      new Chart(ctx,{
+        type:"line",
+        data:{
+          labels:daily.map(x=>x.date),
+          datasets:[
+            {label:"عمليات البحث",data:daily.map(x=>x.searches),borderColor:"#2563eb",fill:false},
+            {label:"أجهزة فريدة",data:daily.map(x=>x.unique_devices),borderColor:"#16a34a",fill:false}
+          ]
+        },
+        options:{responsive:true,plugins:{legend:{display:true}}}
+      });
+    }
 
-    kpi_devices.textContent = data.unique_devices ?? 0;
-    kpi_events.textContent  = data.total_events ?? 0;
-    kpi_searches.textContent= data.total_searches ?? 0;
-
-    // أعلى كلمات البحث
-    topTbl.innerHTML = '<tr><th>الكلمة</th><th>العدد</th></tr>' +
-      (data.top_searches||[]).map(x=>`<tr><td>${escapeHtml(x.q)}</td><td>${x.count}</td></tr>`).join('') ||
-      '<tr><td colspan="2">لا بيانات</td></tr>';
-
-    // آخر 20 حدث
-    latestTbl.innerHTML = `
-      <tr><th>الوقت (UTC)</th><th>الـ IP</th><th>الحدث</th><th>الكلمة/المسار</th><th>المتصفح</th></tr>
-      ${renderLatest(data.latest||[])}
-    `;
-
-    // الرسم
-    drawBars(chartEl, data.daily||[], {a:'unique_devices', b:'searches'});
-
-    msg.textContent='تم.';
-  }catch(e){
-    msg.textContent='فشل التحميل: '+e.message;
-  }
-}
-
-function renderLatest(list){
-  return list.map(e=>{
-    const p = e.payload||{};
-    const qp = p.q ? `🔎 ${escapeHtml(p.q)}` : (p.path? `📄 ${escapeHtml(p.path)}` : '');
-    return `<tr>
-      <td class="mono">${escapeHtml(e.ts||'')}</td>
-      <td class="mono">${escapeHtml(e.ip||'-')}</td>
-      <td>${escapeHtml(e.event||'-')}</td>
-      <td>${qp}</td>
-      <td title="${escapeHtml(e.ua||'')}">${escapeHtml(String(e.ua||'').slice(0,38))}…</td>
-    </tr>`;
-  }).join('');
-}
-
-function escapeHtml(s){return String(s||'').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));}
-
-function drawBars(canvas, daily, keys){
-  const d = daily.slice(-14);
-  const labels = d.map(x=>x.date);
-  const A = d.map(x=>+x[keys.a]||0);
-  const B = d.map(x=>+x[keys.b]||0);
-  const W = canvas.clientWidth, H = canvas.clientHeight;
-  canvas.width = W * devicePixelRatio; canvas.height = H * devicePixelRatio;
-  const ctx = canvas.getContext('2d'); ctx.scale(devicePixelRatio, devicePixelRatio);
-  ctx.clearRect(0,0,W,H);
-
-  const max = Math.max(1, ...A, ...B);
-  const pad = 28, innerW = W - pad*2, innerH = H - pad*2;
-  const n = labels.length || 1, groupW = innerW / n;
-
-  ctx.strokeStyle = '#e5e7eb';
-  ctx.beginPath(); ctx.moveTo(pad, H-pad); ctx.lineTo(W-pad, H-pad); ctx.stroke();
-
-  for(let i=0;i<n;i++){
-    const x0 = pad + i*groupW;
-    const w  = Math.max(6, groupW*0.36);
-    const gap= groupW*0.08;
-
-    const hA = innerH * (A[i]/max);
-    const hB = innerH * (B[i]/max);
-
-    ctx.fillStyle = '#86efac'; ctx.fillRect(x0 + gap, H - pad - hA, w, hA);
-    ctx.fillStyle = '#93c5fd'; ctx.fillRect(x0 + gap + w + gap, H - pad - hB, w, hB);
-
-    ctx.fillStyle = '#64748b'; ctx.font = '10px system-ui';
-    const lbl = String(labels[i]||'').slice(5);
-    ctx.fillText(lbl, x0 + gap, H - pad + 12);
-  }
-}
-
-loadStats();
-</script>
+    function renderTop(list){
+      if(!list||!list.length)return;
+      topT.style.display="table";
+      const tb=topT.querySelector("tbody");
+      tb.innerHTML=list.map(x=>`<tr><td>${x.q}</td><td>${x.count}</td></tr>`).join("");
+    }
+  </script>
 </body>
 </html>
